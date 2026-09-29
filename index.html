@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="공공데이터 API의 지역 교통 이동과 산불 발생 기록을 지도와 산점도로 탐색하는 대시보드">
+  <title>사람과 불 - 움직임을 중심으로</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%2309121f'/%3E%3Cpath d='M20 49c-7-8-3-16 4-23 0 7 3 9 5 11-1-10 4-18 12-24-1 10 9 15 7 25-1 8-8 14-16 14-5 0-9-1-12-3Z' fill='%23ff704d'/%3E%3Cpath d='M27 48c-3-5 0-9 5-14 0 5 4 7 4 11 0 4-3 7-7 7' fill='%23ffd066'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body class="entry-active">
+  <section id="entryScreen" class="entry-screen" role="button" tabindex="0" aria-labelledby="entryTitle" aria-describedby="entryHint">
+    <div class="entry-content">
+      <p class="entry-kicker">MOVEMENT &amp; FIRE</p>
+      <h1 id="entryTitle">사람과 불<br><span>움직임을 중심으로</span></h1>
+      <p id="entryHint" class="entry-hint"><span>CLICK ANYWHERE</span><small>화면을 눌러 시작</small></p>
+    </div>
+    <div class="burn-glow" aria-hidden="true"></div>
+    <p class="entry-footnote">사람의 이동과 산불의 흔적을 한 화면에서 살펴봅니다</p>
+  </section>
+
+  <div id="dashboardContent" class="app-shell" aria-hidden="true" inert>
+    <header class="site-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"><span></span></span>
+        <div>
+          <h1>사람과 불 - 움직임을 중심으로</h1>
+          <p>지역의 이동과 산불을 한 화면에서 탐색합니다</p>
+        </div>
+      </div>
+      <div class="source-note">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="dataStatus">공공데이터 API</span>
+        <b id="dataPeriodLabel">불러오는 중</b>
+      </div>
+    </header>
+
+    <section class="filter-bar" aria-label="데이터 필터">
+      <label class="filter-field">
+        <span>기준월</span>
+        <select id="monthSelect" aria-label="기준월 선택"></select>
+      </label>
+
+      <fieldset class="mode-filter">
+        <legend>교통수단</legend>
+        <label><input type="checkbox" value="rail" checked><span class="mode-dot rail"></span>철도</label>
+        <label><input type="checkbox" value="express" checked><span class="mode-dot express"></span>고속버스</label>
+        <label><input type="checkbox" value="intercity" checked><span class="mode-dot intercity"></span>시외버스</label>
+      </fieldset>
+
+      <fieldset class="direction-filter">
+        <legend>교통 기준</legend>
+        <label><input type="radio" name="trafficDirection" value="inflow"><span>유입량</span></label>
+        <label><input type="radio" name="trafficDirection" value="outflow" checked><span>유출량</span></label>
+      </fieldset>
+
+      <label class="filter-field cause-filter">
+        <span>산불 원인</span>
+        <select id="causeSelect" aria-label="산불 원인 선택">
+          <option value="all">전체 원인</option>
+          <option value="visitor">입산자 실화</option>
+          <option value="smoking">담뱃불</option>
+          <option value="burning">소각</option>
+          <option value="other">기타</option>
+        </select>
+      </label>
+
+      <label class="filter-field region-filter">
+        <span>지역</span>
+        <select id="regionSelect" aria-label="지역 선택"></select>
+      </label>
+
+    </section>
+
+    <main>
+      <section class="workspace" aria-label="교통과 산불 시각화">
+        <article class="panel map-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">이동 흐름 지도</p>
+              <h2><span id="mapDirectionLabel">지역 유출 교통</span>과 산불 발생</h2>
+            </div>
+            <div class="map-heading-actions">
+              <div class="map-legend" aria-label="지도 범례">
+                <span><i class="legend-line"></i><em id="mapLegendDirection">유출 교통</em></span>
+                <span><i class="legend-fire"></i>산불 피해</span>
+              </div>
+              <div class="map-controls" aria-label="지도 확대 및 이동">
+                <button id="mapZoomOut" type="button" aria-label="지도 축소">−</button>
+                <button id="mapZoomReset" type="button" aria-label="지도 배율 초기화">1:1</button>
+                <button id="mapZoomIn" type="button" aria-label="지도 확대">＋</button>
+                <button id="mapExpandButton" class="expand-button" type="button" aria-pressed="false"><span aria-hidden="true">⛶</span><span class="expand-label">지도 크게 보기</span></button>
+              </div>
+            </div>
+          </div>
+          <div id="mapChart" class="chart-host map-host" aria-label="대한민국 지역별 교통 흐름과 산불 지도"></div>
+          <div class="time-track">
+            <span id="monthLabel">2024년 3월</span>
+            <div class="track"><div id="trackFill" class="track-fill"></div></div>
+            <span id="periodEndLabel">2026년 6월</span>
+          </div>
+        </article>
+
+        <article class="panel scatter-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">지역 사분면</p>
+              <h2><span id="scatterDirectionLabel">유출 교통량</span>과 산불</h2>
+            </div>
+            <button id="metricButton" class="text-button" type="button">피해면적 보기</button>
+          </div>
+          <div id="scatterChart" class="chart-host scatter-host" aria-label="지역별 교통량과 산불 발생 사분면 산점도"></div>
+          <p class="chart-caption">점을 선택하면 지도와 상세 정보가 함께 바뀝니다.</p>
+        </article>
+      </section>
+
+      <section class="correlation-panel" aria-label="산불과 지역 교통량 상관관계">
+        <div class="correlation-summary">
+          <p class="eyebrow">월별 상관관계</p>
+          <h2><span id="corrRegion">강원도</span> 산불과 교통 <span id="corrDirectionLabel">유출</span></h2>
+          <p id="corrCopy" class="correlation-copy">선택 지역의 공통 기간 유출 교통량과 산불 발생을 비교합니다.</p>
+          <div class="correlation-score" aria-live="polite">
+            <span>피어슨 상관계수</span>
+            <strong id="corrValue">-</strong>
+            <b id="corrLabel">계산 중</b>
+          </div>
+        </div>
+        <div id="correlationChart" class="chart-host correlation-chart" aria-label="선택 지역의 월별 산불과 교통량 산점도"></div>
+      </section>
+
+      <section class="detail-grid" aria-label="선택 지역 상세 정보">
+        <article class="detail-panel summary-panel">
+          <div class="detail-heading">
+            <p class="eyebrow">선택 지역</p>
+            <h2 id="selectedRegionName">강원도</h2>
+          </div>
+          <div class="metric-list">
+            <div><span id="trafficMetricLabel">월간 유출</span><strong id="trafficMetric">-</strong></div>
+            <div><span>산불 발생</span><strong id="fireMetric">-</strong></div>
+            <div><span>피해면적</span><strong id="areaMetric">-</strong></div>
+          </div>
+        </article>
+
+        <article class="detail-panel route-panel">
+          <div class="detail-heading inline-heading">
+            <div>
+              <p id="routeEyebrow" class="eyebrow">주요 유출</p>
+              <h2 id="routeTitle">지역을 벗어난 경로</h2>
+            </div>
+            <span id="routePeriod" class="muted-label">2024년 3월</span>
+          </div>
+          <div id="routeList" class="route-list"></div>
+        </article>
+
+        <article class="detail-panel incidents-panel">
+          <div class="detail-heading inline-heading">
+            <div>
+              <p class="eyebrow">산불 기록</p>
+              <h2>원인별 발생</h2>
+            </div>
+            <span id="incidentCount" class="muted-label">-</span>
+          </div>
+          <div id="causeBars" class="cause-bars"></div>
+        </article>
+      </section>
+
+      <p class="prototype-note"><strong>데이터 안내</strong> 산림청 산불발생통계와 국토교통부 고속·시외버스 및 도시철도 OD API의 공통 제공기간만 사용했습니다. 교통량은 시도별 주요 교통거점의 대표 유출 경로를 기준으로 하며, 상관계수는 인과관계를 의미하지 않습니다.</p>
+    </main>
+  </div>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
