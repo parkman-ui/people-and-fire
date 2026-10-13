@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=20261013-compact-correlation-2">
 </head>
 <body class="entry-active">
   <section id="entryScreen" class="entry-screen" role="button" tabindex="0" aria-labelledby="entryTitle" aria-describedby="entryHint">
@@ -75,6 +75,24 @@
 
     </section>
 
+    <section class="insight-strip" aria-label="선택 월 자동 인사이트">
+      <article class="insight-card traffic-insight">
+        <p class="eyebrow">교통 변화</p>
+        <strong id="trafficInsightTitle">계산 중</strong>
+        <span id="trafficInsightCopy">선택 지역의 전월 대비 변화를 확인합니다.</span>
+      </article>
+      <article class="insight-card fire-insight">
+        <p class="eyebrow">산불 위치</p>
+        <strong id="fireInsightTitle">계산 중</strong>
+        <span id="fireInsightCopy">전국 지역 중 현재 위치를 확인합니다.</span>
+      </article>
+      <article class="insight-card balance-insight">
+        <p class="eyebrow">이동 균형</p>
+        <strong id="balanceInsightTitle">계산 중</strong>
+        <span id="balanceInsightCopy">유입과 유출의 차이를 확인합니다.</span>
+      </article>
+    </section>
+
     <main>
       <section class="workspace" aria-label="교통과 산불 시각화">
         <article class="panel map-panel">
@@ -99,7 +117,11 @@
           <div id="mapChart" class="chart-host map-host" aria-label="대한민국 지역별 교통 흐름과 산불 지도"></div>
           <div class="time-track">
             <span id="monthLabel">2024년 3월</span>
-            <div class="track"><div id="trackFill" class="track-fill"></div></div>
+            <div class="month-stepper">
+              <button id="monthPrevButton" class="month-step-button" type="button" aria-label="이전 월" title="이전 월">←</button>
+              <input id="monthSlider" class="month-slider" type="range" min="0" max="0" value="0" step="1" aria-label="기준월 슬라이더">
+              <button id="monthNextButton" class="month-step-button" type="button" aria-label="다음 월" title="다음 월">→</button>
+            </div>
             <span id="periodEndLabel">2026년 6월</span>
           </div>
         </article>
@@ -107,28 +129,51 @@
         <article class="panel scatter-panel">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">지역 사분면</p>
-              <h2><span id="scatterDirectionLabel">유출 교통량</span>과 산불</h2>
+              <p class="eyebrow">지역 이동 균형</p>
+              <h2>유입·유출 균형과 산불</h2>
             </div>
             <button id="metricButton" class="text-button" type="button">피해면적 보기</button>
           </div>
-          <div id="scatterChart" class="chart-host scatter-host" aria-label="지역별 교통량과 산불 발생 사분면 산점도"></div>
-          <p class="chart-caption">점을 선택하면 지도와 상세 정보가 함께 바뀝니다.</p>
+          <div id="scatterChart" class="chart-host scatter-host" aria-label="지역별 유입량과 유출량 균형 및 산불 규모 비교 차트"></div>
+          <p class="chart-caption">순유입 우세에서 순유출 우세 순으로 정렬됩니다. 행을 선택하면 지도와 상세 정보가 함께 바뀝니다.</p>
         </article>
       </section>
 
       <section class="correlation-panel" aria-label="산불과 지역 교통량 상관관계">
         <div class="correlation-summary">
           <p class="eyebrow">월별 상관관계</p>
-          <h2><span id="corrRegion">강원도</span> 산불과 교통 <span id="corrDirectionLabel">유출</span></h2>
-          <p id="corrCopy" class="correlation-copy">선택 지역의 공통 기간 유출 교통량과 산불 발생을 비교합니다.</p>
+          <h2 id="corrTitle"><span id="corrRegion">강원도</span> <span id="corrTitleMode">월별 산불과 교통 흐름</span></h2>
+          <div class="correlation-view-toggle correlation-toggle" role="group" aria-label="상관관계 화면 선택">
+            <button type="button" data-corr-view="timeline" aria-pressed="true">월별 흐름</button>
+            <button type="button" data-corr-view="event" aria-pressed="false">산불 전후 비교</button>
+          </div>
+          <p id="corrCopy" class="correlation-copy">월에 따른 유입·유출 교통량과 산불 발생을 함께 비교합니다.</p>
+          <div class="correlation-control-row">
+            <span>교통 표시</span>
+            <div class="correlation-toggle correlation-series-toggle" role="group" aria-label="교통량 표시 방식 선택">
+              <button type="button" data-corr-traffic="both" aria-pressed="true">동시</button>
+              <button type="button" data-corr-traffic="inflow" aria-pressed="false">유입만</button>
+              <button type="button" data-corr-traffic="outflow" aria-pressed="false">유출만</button>
+            </div>
+          </div>
+          <div class="correlation-control-row">
+            <span>산불 지표</span>
+            <div class="correlation-toggle correlation-metric-toggle" role="group" aria-label="산불 지표 선택">
+              <button type="button" data-corr-metric="fires" aria-pressed="true">발생건수</button>
+              <button type="button" data-corr-metric="area" aria-pressed="false">피해면적</button>
+            </div>
+          </div>
           <div class="correlation-score" aria-live="polite">
-            <span>피어슨 상관계수</span>
-            <strong id="corrValue">-</strong>
+            <div id="corrInScore"><span>유입 상관</span><strong id="corrInValue">-</strong></div>
+            <div id="corrOutScore"><span>유출 상관</span><strong id="corrOutValue">-</strong></div>
             <b id="corrLabel">계산 중</b>
           </div>
+          <div id="eventSummary" class="event-summary" aria-live="polite" hidden>
+            <div><span id="eventMonthLabel">산불 발생월</span><strong id="eventFireValue">-</strong></div>
+            <b id="eventDeltaLabel">전후 교통량을 계산 중입니다.</b>
+          </div>
         </div>
-        <div id="correlationChart" class="chart-host correlation-chart" aria-label="선택 지역의 월별 산불과 교통량 산점도"></div>
+        <div id="correlationChart" class="chart-host correlation-chart" aria-label="선택 지역의 월별 유입량, 유출량, 산불 지표 추이 그래프"></div>
       </section>
 
       <section class="detail-grid" aria-label="선택 지역 상세 정보">
@@ -167,6 +212,27 @@
         </article>
       </section>
 
+      <section class="heatmap-panel" aria-label="지역과 월별 이상치 히트맵">
+        <div class="heatmap-heading">
+          <div>
+            <p class="eyebrow">이상치 탐색</p>
+            <h2>지역×월 변화 히트맵</h2>
+            <p>각 지역의 평소 수준과 비교해 유난히 높거나 낮았던 월을 찾습니다.</p>
+          </div>
+          <div class="heatmap-actions">
+            <div class="correlation-toggle heatmap-metric-toggle" role="group" aria-label="히트맵 지표 선택">
+              <button type="button" data-heatmap-metric="outflow" aria-pressed="true">유출</button>
+              <button type="button" data-heatmap-metric="inflow" aria-pressed="false">유입</button>
+              <button type="button" data-heatmap-metric="fires" aria-pressed="false">산불건수</button>
+              <button type="button" data-heatmap-metric="area" aria-pressed="false">피해면적</button>
+            </div>
+            <button id="heatmapCollapseButton" class="text-button heatmap-collapse-button" type="button" aria-expanded="true" aria-controls="anomalyHeatmap">접기</button>
+          </div>
+        </div>
+        <div id="anomalyHeatmap" class="chart-host anomaly-heatmap" aria-label="지역별 월간 지표 이상치 히트맵"></div>
+        <p class="heatmap-note"><span class="heatmap-scale low"></span>평소보다 낮음 <span class="heatmap-scale normal"></span>평소 수준 <span class="heatmap-scale high"></span>평소보다 높음 · 셀을 선택하면 지역과 기준월이 함께 바뀝니다.</p>
+      </section>
+
       <p class="prototype-note"><strong>데이터 안내</strong> 산림청 산불발생통계와 국토교통부 고속·시외버스 및 도시철도 OD API의 공통 제공기간만 사용했습니다. 교통량은 시도별 주요 교통거점의 대표 유출 경로를 기준으로 하며, 상관계수는 인과관계를 의미하지 않습니다.</p>
     </main>
   </div>
@@ -174,6 +240,6 @@
   <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=20261013-event-month-fix"></script>
 </body>
 </html>

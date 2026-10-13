@@ -27,6 +27,10 @@ const state = {
   cause: "all",
   selected: "강원도",
   metric: "fires",
+  corrMetric: "fires",
+  corrTrafficView: "both",
+  corrView: "timeline",
+  heatmapMetric: "outflow",
   mapTransform: d3.zoomIdentity
 };
 
@@ -39,6 +43,7 @@ let trafficRecords = [];
 let fireRecords = [];
 let trafficByPeriod = new Map();
 let fireByPeriodRegion = new Map();
+let monthRenderFrame;
 const byName = new Map(regions.map(d => [d.name, d]));
 const tooltip = d3.select("#tooltip");
 
@@ -122,8 +127,11 @@ function chooseRegion(name) {
 
 function setupControls() {
   const monthSelect = document.querySelector("#monthSelect");
+  const monthSlider = document.querySelector("#monthSlider");
   months.forEach((period, index) => monthSelect.add(new Option(formatPeriod(period), index)));
   monthSelect.value = state.month;
+  monthSlider.max = String(Math.max(0, months.length - 1));
+  monthSlider.value = String(state.month);
 
   const regionSelect = document.querySelector("#regionSelect");
   regionSelect.add(new Option("전국", "all"));
@@ -133,6 +141,15 @@ function setupControls() {
   monthSelect.addEventListener("change", event => {
     chooseMonth(Number(event.target.value));
   });
+
+  monthSlider.addEventListener("input", event => {
+    const nextMonth = Number(event.target.value);
+    cancelAnimationFrame(monthRenderFrame);
+    monthRenderFrame = requestAnimationFrame(() => chooseMonth(nextMonth));
+  });
+
+  document.querySelector("#monthPrevButton").addEventListener("click", () => chooseMonth(state.month - 1));
+  document.querySelector("#monthNextButton").addEventListener("click", () => chooseMonth(state.month + 1));
 
   document.querySelector("#causeSelect").addEventListener("change", event => {
     state.cause = event.target.value;
@@ -165,6 +182,61 @@ function setupControls() {
     state.metric = state.metric === "fires" ? "area" : "fires";
     document.querySelector("#metricButton").textContent = state.metric === "fires" ? "피해면적 보기" : "발생건수 보기";
     renderScatter();
+    renderInsights();
+  });
+
+  document.querySelectorAll("[data-corr-metric]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.corrMetric = button.dataset.corrMetric;
+      document.querySelectorAll("[data-corr-metric]").forEach(item => {
+        const active = item === button;
+        item.setAttribute("aria-pressed", String(active));
+      });
+      renderCorrelation();
+    });
+  });
+
+  document.querySelectorAll("[data-corr-traffic]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.corrTrafficView = button.dataset.corrTraffic;
+      document.querySelectorAll("[data-corr-traffic]").forEach(item => {
+        item.setAttribute("aria-pressed", String(item === button));
+      });
+      renderCorrelation();
+    });
+  });
+
+  document.querySelectorAll("[data-corr-view]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.corrView = button.dataset.corrView;
+      document.querySelectorAll("[data-corr-view]").forEach(item => {
+        item.setAttribute("aria-pressed", String(item === button));
+      });
+      renderCorrelation();
+    });
+  });
+
+  document.querySelectorAll("[data-heatmap-metric]").forEach(button => {
+    button.addEventListener("click", () => {
+      state.heatmapMetric = button.dataset.heatmapMetric;
+      document.querySelectorAll("[data-heatmap-metric]").forEach(item => {
+        item.setAttribute("aria-pressed", String(item === button));
+      });
+      renderHeatmap();
+    });
+  });
+
+  document.querySelector("#heatmapCollapseButton").addEventListener("click", event => {
+    const panel = document.querySelector(".heatmap-panel");
+    const host = document.querySelector("#anomalyHeatmap");
+    const note = panel.querySelector(".heatmap-note");
+    const expanded = event.currentTarget.getAttribute("aria-expanded") !== "true";
+    event.currentTarget.setAttribute("aria-expanded", String(expanded));
+    event.currentTarget.textContent = expanded ? "접기" : "펼치기";
+    panel.classList.toggle("is-collapsed", !expanded);
+    host.hidden = !expanded;
+    note.hidden = !expanded;
+    if (expanded) requestAnimationFrame(renderHeatmap);
   });
 
   document.querySelector("#mapZoomIn").addEventListener("click", () => zoomMap(1.45));
@@ -225,29 +297,43 @@ function toggleMapExpansion() {
 }
 
 function chooseMonth(month) {
-  state.month = month;
-  document.querySelector("#monthSelect").value = month;
+  state.month = Math.max(0, Math.min(months.length - 1, month));
+  document.querySelector("#monthSelect").value = state.month;
+  hideTooltip();
+  renderAll();
+}
+
+function chooseRegionAndMonth(name, month) {
+  state.selected = name;
+  state.month = Math.max(0, Math.min(months.length - 1, month));
+  document.querySelector("#regionSelect").value = name;
+  document.querySelector("#monthSelect").value = state.month;
   hideTooltip();
   renderAll();
 }
 
 function renderAll() {
   syncDirectionLabels();
+  const monthSlider = document.querySelector("#monthSlider");
+  const sliderProgress = months.length > 1 ? state.month / (months.length - 1) * 100 : 0;
   document.querySelector("#monthLabel").textContent = formatPeriod(months[state.month]);
-  document.querySelector("#trackFill").style.width = `${((state.month + 1) / months.length) * 100}%`;
+  monthSlider.value = String(state.month);
+  monthSlider.style.setProperty("--slider-progress", `${sliderProgress}%`);
+  monthSlider.setAttribute("aria-valuetext", formatPeriod(months[state.month]));
+  document.querySelector("#monthPrevButton").disabled = state.month === 0;
+  document.querySelector("#monthNextButton").disabled = state.month === months.length - 1;
   renderMap();
   renderScatter();
   renderCorrelation();
   renderDetails();
+  renderInsights();
+  renderHeatmap();
 }
 
 function syncDirectionLabels() {
   const word = state.direction === "inflow" ? "유입" : "유출";
   document.querySelector("#mapDirectionLabel").textContent = `지역 ${word} 교통`;
-  document.querySelector("#scatterDirectionLabel").textContent = `${word} 교통량`;
   document.querySelector("#mapLegendDirection").textContent = `${word} 교통`;
-  document.querySelector("#corrDirectionLabel").textContent = word;
-  document.querySelector("#corrCopy").textContent = `선택 지역의 공통 기간 ${months.length}개월 ${word} 교통량과 산불 발생을 비교합니다.`;
   document.querySelector("#trafficMetricLabel").textContent = `월간 ${word}`;
   document.querySelector("#routeEyebrow").textContent = `주요 ${word}`;
   document.querySelector("#routeTitle").textContent = state.direction === "inflow" ? "지역으로 들어온 경로" : "지역을 벗어난 경로";
@@ -365,65 +451,99 @@ function renderScatter() {
   const host = document.querySelector("#scatterChart");
   const width = Math.max(host.clientWidth, 430);
   const height = Math.max(host.clientHeight, 440);
-  const margin = { top: 32, right: 26, bottom: 58, left: 62 };
+  const margin = { top: 54, right: 92, bottom: 44, left: 28 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
-  const rows = allRows();
-  const yKey = state.metric === "fires" ? "fireValue" : "areaValue";
-  const xMedian = d3.median(rows, d => d.trafficValue);
-  const yMedian = d3.median(rows, d => d[yKey]);
-  const x = d3.scaleLinear().domain([0, d3.max(rows, d => d.trafficValue) * 1.08]).nice().range([0, innerWidth]);
-  const y = d3.scaleLinear().domain([0, d3.max(rows, d => d[yKey]) * 1.12]).nice().range([innerHeight, 0]);
-  const radius = d3.scaleSqrt().domain([0, d3.max(rows, d => d.areaValue)]).range([5, 14]);
+  const inflowByName = new Map(allRows(state.month, state.cause, "inflow").map(row => [row.name, row]));
+  const outflowByName = new Map(allRows(state.month, state.cause, "outflow").map(row => [row.name, row]));
+  const rows = regions.map(region => {
+    const inflow = inflowByName.get(region.name);
+    const outflow = outflowByName.get(region.name);
+    return {
+      ...region,
+      inflowValue: inflow.trafficValue,
+      outflowValue: outflow.trafficValue,
+      netValue: outflow.trafficValue - inflow.trafficValue,
+      fireValue: inflow.fireValue,
+      areaValue: inflow.areaValue
+    };
+  }).sort((a, b) => d3.ascending(a.netValue, b.netValue));
+  const fireKey = state.metric === "fires" ? "fireValue" : "areaValue";
+  const fireLabel = state.metric === "fires" ? "발생건수" : "피해면적";
+  const maxTraffic = d3.max(rows, row => Math.max(row.inflowValue, row.outflowValue)) || 1;
+  const maxFire = d3.max(rows, row => row[fireKey]) || 1;
+  const x = d3.scaleLinear().domain([-maxTraffic, maxTraffic]).nice().range([0, innerWidth]);
+  const y = d3.scaleBand().domain(rows.map(row => row.name)).range([0, innerHeight]).padding(.22);
+  const fireRadius = d3.scaleSqrt().domain([0, maxFire]).range([2.5, 10.5]);
+  const centerX = x(0);
+  const fireX = innerWidth + 30;
+  const compactTraffic = value => value >= 1000000 ? `${(value / 1000000).toFixed(1)}M` : value >= 1000 ? `${Math.round(value / 1000)}k` : Math.round(value);
+  const fireText = row => state.metric === "fires" ? `${Math.round(row.fireValue)}건` : `${row.areaValue.toFixed(1)}ha`;
   const svg = d3.select(host).selectAll("svg").data([null]).join("svg").attr("viewBox", `0 0 ${width} ${height}`);
   svg.selectAll("*").remove();
+  const defs = svg.append("defs");
+  const inflowGradient = defs.append("linearGradient").attr("id", "balance-inflow-gradient").attr("x1", "100%").attr("x2", "0%");
+  inflowGradient.append("stop").attr("offset", "0%").attr("stop-color", "#5fb7ff").attr("stop-opacity", .95);
+  inflowGradient.append("stop").attr("offset", "100%").attr("stop-color", "#356fa8").attr("stop-opacity", .55);
+  const outflowGradient = defs.append("linearGradient").attr("id", "balance-outflow-gradient").attr("x1", "0%").attr("x2", "100%");
+  outflowGradient.append("stop").attr("offset", "0%").attr("stop-color", "#58d6ce").attr("stop-opacity", .95);
+  outflowGradient.append("stop").attr("offset", "100%").attr("stop-color", "#238b8a").attr("stop-opacity", .55);
   const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-  const gridX = d3.axisBottom(x).ticks(5).tickSize(-innerHeight).tickFormat("");
-  const gridY = d3.axisLeft(y).ticks(5).tickSize(-innerWidth).tickFormat("");
-  g.append("g").attr("class", "chart-grid").attr("transform", `translate(0,${innerHeight})`).call(gridX);
-  g.append("g").attr("class", "chart-grid").call(gridY);
+  g.append("g").attr("class", "chart-grid balance-grid").attr("transform", `translate(0,${innerHeight})`)
+    .call(d3.axisBottom(x).ticks(5).tickSize(-innerHeight).tickFormat(""));
+  g.append("g").attr("class", "x-axis balance-axis").attr("transform", `translate(0,${innerHeight})`)
+    .call(d3.axisBottom(x).ticks(5).tickFormat(value => compactTraffic(Math.abs(value))));
+  g.append("line").attr("class", "balance-center-line").attr("x1", centerX).attr("x2", centerX).attr("y1", -9).attr("y2", innerHeight);
+  g.append("text").attr("class", "balance-zone-label inflow-zone").attr("x", 0).attr("y", -34).attr("text-anchor", "start").text("순유입 우세");
+  g.append("text").attr("class", "balance-zone-label outflow-zone").attr("x", innerWidth).attr("y", -34).attr("text-anchor", "end").text("순유출 우세");
+  g.append("text").attr("class", "balance-direction-label inflow-zone").attr("x", centerX * .5).attr("y", -14).attr("text-anchor", "middle").text("← 유입량");
+  g.append("text").attr("class", "balance-direction-label outflow-zone").attr("x", centerX + centerX * .5).attr("y", -14).attr("text-anchor", "middle").text("유출량 →");
+  g.append("text").attr("class", "balance-fire-heading").attr("x", fireX).attr("y", -14).attr("text-anchor", "middle").text(`산불 ${fireLabel}`);
 
-  g.append("line").attr("class", "median-line").attr("x1", x(xMedian)).attr("x2", x(xMedian)).attr("y1", 0).attr("y2", innerHeight);
-  g.append("line").attr("class", "median-line").attr("x1", 0).attr("x2", innerWidth).attr("y1", y(yMedian)).attr("y2", y(yMedian));
-
-  const quadrants = [
-    { x: innerWidth - 8, y: 17, anchor: "end", text: "이동 많음 · 산불 많음" },
-    { x: 8, y: 17, anchor: "start", text: "이동 적음 · 산불 많음" },
-    { x: innerWidth - 8, y: innerHeight - 10, anchor: "end", text: "이동 많음 · 산불 적음" },
-    { x: 8, y: innerHeight - 10, anchor: "start", text: "이동 적음 · 산불 적음" }
-  ];
-  g.append("g").selectAll("text").data(quadrants).join("text")
-    .attr("class", "quadrant-label").attr("x", d => d.x).attr("y", d => d.y).attr("text-anchor", d => d.anchor).text(d => d.text);
-
-  g.append("g").attr("class", "x-axis").attr("transform", `translate(0,${innerHeight})`)
-    .call(d3.axisBottom(x).ticks(5).tickFormat(value => value >= 1000000 ? `${(value / 1000000).toFixed(1)}M` : value >= 1000 ? `${Math.round(value / 1000)}k` : value));
-  g.append("g").attr("class", "y-axis").call(d3.axisLeft(y).ticks(5));
-  const direction = state.direction === "inflow" ? "유입" : "유출";
-  g.append("text").attr("class", "axis-title").attr("x", innerWidth / 2).attr("y", innerHeight + 48).attr("text-anchor", "middle").text(`월간 지역 교통 ${direction}량`);
-  g.append("text").attr("class", "axis-title").attr("transform", "rotate(-90)").attr("x", -innerHeight / 2).attr("y", -46).attr("text-anchor", "middle").text(state.metric === "fires" ? "산불 발생 건수" : "산불 피해면적 (ha)");
-
-  g.append("g").selectAll("circle")
-    .data(rows)
-    .join("circle")
-    .attr("class", row => `scatter-dot ${state.selected === row.name ? "is-selected" : ""}`)
-    .attr("cx", row => x(row.trafficValue))
-    .attr("cy", row => y(row[yKey]))
-    .attr("r", row => radius(row.areaValue))
+  const rowGroups = g.append("g").selectAll("g.balance-row")
+    .data(rows, row => row.name)
+    .join("g")
+    .attr("class", row => `balance-row ${state.selected === row.name ? "is-selected" : ""}`)
+    .attr("transform", row => `translate(0,${y(row.name)})`)
     .attr("tabindex", 0)
     .attr("role", "button")
-    .attr("aria-label", row => `${row.name} 선택`)
+    .attr("aria-label", row => `${row.name}, 유입 ${formatTraffic(row.inflowValue)}, 유출 ${formatTraffic(row.outflowValue)}, 산불 ${fireText(row)}, 선택`)
     .on("click", (_, row) => chooseRegion(row.name))
-    .on("keydown", (event, row) => { if (event.key === "Enter" || event.key === " ") chooseRegion(row.name); })
-    .on("mousemove", (event, row) => showTooltip(event, `<b>${row.name}</b><span>${direction} 교통 ${formatTraffic(row.trafficValue)}</span><span>${state.metric === "fires" ? `산불 ${Math.round(row.fireValue)}건` : `피해 ${row.areaValue.toFixed(1)}ha`}</span>`))
+    .on("keydown", (event, row) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      chooseRegion(row.name);
+    })
+    .on("mousemove", (event, row) => {
+      const balance = Math.abs(row.netValue) < 1 ? "유입·유출 균형" : `${row.netValue > 0 ? "순유출" : "순유입"} ${formatTraffic(Math.abs(row.netValue))}`;
+      showTooltip(event, `<b>${row.name}</b><span>유입 ${formatTraffic(row.inflowValue)}</span><span>유출 ${formatTraffic(row.outflowValue)}</span><span>${balance}</span><span>산불 ${Math.round(row.fireValue)}건 · 피해 ${row.areaValue.toFixed(1)}ha</span>`);
+    })
     .on("mouseleave", hideTooltip);
 
-  const labelRows = rows.filter(row => state.selected === row.name || row.trafficValue > xMedian * 1.5 || row[yKey] > yMedian * 1.65);
-  g.append("g").selectAll("text").data(labelRows).join("text")
-    .attr("class", row => `point-label ${state.selected === row.name ? "is-selected" : ""}`)
-    .attr("x", row => x(row.trafficValue) + radius(row.areaValue) + 5)
-    .attr("y", row => y(row[yKey]) - 4)
-    .text(row => row.short);
+  rowGroups.append("rect")
+    .attr("class", "balance-row-background")
+    .attr("x", -12).attr("y", -2).attr("width", innerWidth + margin.right - 8).attr("height", y.bandwidth() + 4).attr("rx", 7);
+  rowGroups.append("rect")
+    .attr("class", "balance-bar inflow-bar")
+    .attr("x", row => x(-row.inflowValue)).attr("y", y.bandwidth() * .2)
+    .attr("width", row => centerX - x(-row.inflowValue)).attr("height", y.bandwidth() * .6).attr("rx", 3);
+  rowGroups.append("rect")
+    .attr("class", "balance-bar outflow-bar")
+    .attr("x", centerX).attr("y", y.bandwidth() * .2)
+    .attr("width", row => x(row.outflowValue) - centerX).attr("height", y.bandwidth() * .6).attr("rx", 3);
+  rowGroups.append("text")
+    .attr("class", "balance-region-label")
+    .attr("x", centerX).attr("y", y.bandwidth() / 2 + 3.4).attr("text-anchor", "middle").text(row => row.short);
+  rowGroups.append("circle")
+    .attr("class", "balance-fire-dot")
+    .attr("cx", fireX).attr("cy", y.bandwidth() / 2)
+    .attr("r", row => row[fireKey] > 0 ? fireRadius(row[fireKey]) : 2)
+    .attr("fill", state.metric === "fires" ? "#ff9a5a" : "#ff5f69")
+    .attr("opacity", row => row[fireKey] > 0 ? .9 : .22);
+  rowGroups.append("text")
+    .attr("class", "balance-fire-value")
+    .attr("x", fireX + 14).attr("y", y.bandwidth() / 2 + 3.2).text(fireText);
 }
 
 function correlationLabel(value) {
@@ -443,47 +563,131 @@ function pearson(data, xKey, yKey) {
 
 function correlationSeries() {
   return d3.range(months.length).map(month => {
-    const rows = state.selected ? [rowFor(byName.get(state.selected), month)] : allRows(month);
+    const inflowRows = state.selected
+      ? [rowFor(byName.get(state.selected), month, state.cause, "inflow")]
+      : allRows(month, state.cause, "inflow");
+    const outflowRows = state.selected
+      ? [rowFor(byName.get(state.selected), month, state.cause, "outflow")]
+      : allRows(month, state.cause, "outflow");
     return {
       month,
       period: months[month],
-      trafficValue: d3.sum(rows, d => d.trafficValue),
-      fireValue: d3.sum(rows, d => d.fireValue)
+      date: new Date(`${months[month]}-01T00:00:00Z`),
+      inflowValue: d3.sum(inflowRows, d => d.trafficValue),
+      outflowValue: d3.sum(outflowRows, d => d.trafficValue),
+      fireValue: d3.sum(inflowRows, d => d.fireValue),
+      areaValue: d3.sum(inflowRows, d => d.areaValue)
     };
   });
 }
 
 function renderCorrelation() {
   const data = correlationSeries();
-  const value = pearson(data, "trafficValue", "fireValue");
+  const fireKey = state.corrMetric === "fires" ? "fireValue" : "areaValue";
+  const fireLabel = state.corrMetric === "fires" ? "발생건수" : "피해면적";
+  const fireTopic = state.corrMetric === "fires" ? "발생건수는" : "피해면적은";
+  const inflowValue = pearson(data, "inflowValue", fireKey);
+  const outflowValue = pearson(data, "outflowValue", fireKey);
   const regionName = state.selected || "전국";
-  const direction = state.direction === "inflow" ? "유입" : "유출";
-  document.querySelector("#corrRegion").textContent = regionName;
-  document.querySelector("#corrValue").textContent = `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
-  document.querySelector("#corrLabel").textContent = correlationLabel(value);
-
+  const trafficViewLabel = state.corrTrafficView === "both" ? "유입·유출" : state.corrTrafficView === "inflow" ? "유입" : "유출";
+  const trafficSeries = [
+    { key: "inflowValue", label: "유입량", color: "#5fb7ff", gradient: "corr-inflow-gradient", className: "inflow-dot" },
+    { key: "outflowValue", label: "유출량", color: "#58d6ce", gradient: "corr-outflow-gradient", className: "outflow-dot" }
+  ];
+  const activeTraffic = trafficSeries.filter(series => state.corrTrafficView === "both" || series.key.startsWith(state.corrTrafficView));
   const host = document.querySelector("#correlationChart");
-  const width = Math.max(host.clientWidth, 520);
-  const height = Math.max(host.clientHeight, 210);
-  const margin = { top: 18, right: 28, bottom: 48, left: 56 };
+  const isEventView = state.corrView === "event";
+  document.querySelector("#corrRegion").textContent = regionName;
+  document.querySelector("#corrTitleMode").textContent = isEventView ? "산불 발생 전후 이동 변화" : "월별 산불과 교통 흐름";
+  document.querySelector("#corrInValue").textContent = `${inflowValue >= 0 ? "+" : ""}${inflowValue.toFixed(2)}`;
+  document.querySelector("#corrOutValue").textContent = `${outflowValue >= 0 ? "+" : ""}${outflowValue.toFixed(2)}`;
+  document.querySelector("#corrInScore").hidden = state.corrTrafficView === "outflow";
+  document.querySelector("#corrOutScore").hidden = state.corrTrafficView === "inflow";
+  document.querySelector("#corrLabel").textContent = state.corrTrafficView === "both"
+    ? `${fireLabel} 기준 · 유입 ${correlationLabel(inflowValue)} · 유출 ${correlationLabel(outflowValue)}`
+    : `${fireLabel} 기준 · ${trafficViewLabel} ${correlationLabel(state.corrTrafficView === "inflow" ? inflowValue : outflowValue)}`;
+  document.querySelector(".correlation-score").hidden = isEventView;
+  document.querySelector("#eventSummary").hidden = !isEventView;
+  if (isEventView) {
+    renderEventComparison({ host, data, fireKey, fireLabel, regionName, trafficViewLabel, activeTraffic });
+    return;
+  }
+  document.querySelector("#corrCopy").textContent = `${regionName}의 ${months.length}개월 ${trafficViewLabel} 교통량은 위쪽, 산불 ${fireTopic} 아래쪽에서 비교합니다. 점을 선택하면 기준월이 함께 바뀝니다.`;
+  host.setAttribute("aria-label", "선택 지역의 월별 유입량, 유출량, 산불 지표 추이 그래프");
+
+  const width = Math.max(host.clientWidth, 620);
+  const height = Math.max(host.clientHeight, 370);
+  const margin = { top: 48, right: 72, bottom: 52, left: 68 };
   const innerWidth = width - margin.left - margin.right;
   const innerHeight = height - margin.top - margin.bottom;
-  const x = d3.scaleLinear().domain([d3.min(data, d => d.trafficValue) * 0.9, d3.max(data, d => d.trafficValue) * 1.07]).nice().range([0, innerWidth]);
-  const y = d3.scaleLinear().domain([0, d3.max(data, d => d.fireValue) * 1.16]).nice().range([innerHeight, 0]);
+  const plotGap = 44;
+  const trafficHeight = Math.round((innerHeight - plotGap) * .58);
+  const fireHeight = innerHeight - plotGap - trafficHeight;
+  const fireTop = trafficHeight + plotGap;
+  const x = d3.scaleUtc()
+    .domain(d3.extent(data, d => d.date))
+    .range([0, innerWidth]);
+  const trafficMax = d3.max(data, d => d3.max(activeTraffic, series => d[series.key])) || 1;
+  const fireMax = d3.max(data, d => d[fireKey]) || 1;
+  const yTraffic = d3.scaleLinear().domain([0, trafficMax * 1.08]).nice().range([trafficHeight, 0]);
+  const yFire = state.corrMetric === "area"
+    ? d3.scaleSymlog().constant(1).domain([0, fireMax * 1.08]).nice().range([fireHeight, 0])
+    : d3.scaleLinear().domain([0, fireMax * 1.12]).nice().range([fireHeight, 0]);
   const svg = d3.select(host).selectAll("svg").data([null]).join("svg").attr("viewBox", `0 0 ${width} ${height}`);
   svg.selectAll("*").remove();
+  const defs = svg.append("defs");
+  const progress = months.length > 1 ? state.month / (months.length - 1) : 0;
+  const addProgressGradient = (id, color) => {
+    const gradient = defs.append("linearGradient").attr("id", id).attr("x1", "0%").attr("x2", "100%");
+    const split = Math.max(0, Math.min(1, progress));
+    gradient.append("stop").attr("offset", "0%").attr("stop-color", color).attr("stop-opacity", .32);
+    gradient.append("stop").attr("offset", `${split * 100}%`).attr("stop-color", color).attr("stop-opacity", 1);
+    gradient.append("stop").attr("offset", `${Math.min(100, split * 100 + .15)}%`).attr("stop-color", color).attr("stop-opacity", .16);
+    gradient.append("stop").attr("offset", "100%").attr("stop-color", color).attr("stop-opacity", .16);
+  };
+  addProgressGradient("corr-inflow-gradient", "#5fb7ff");
+  addProgressGradient("corr-outflow-gradient", "#58d6ce");
+  addProgressGradient("corr-fire-gradient", state.corrMetric === "fires" ? "#ff9a5a" : "#ff5f69");
   const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
 
-  g.append("g").attr("class", "chart-grid").attr("transform", `translate(0,${innerHeight})`).call(d3.axisBottom(x).ticks(6).tickSize(-innerHeight).tickFormat(""));
-  g.append("g").attr("class", "chart-grid").call(d3.axisLeft(y).ticks(4).tickSize(-innerWidth).tickFormat(""));
-  g.append("g").attr("class", "x-axis").attr("transform", `translate(0,${innerHeight})`).call(d3.axisBottom(x).ticks(6).tickFormat(d => d >= 1000000 ? `${(d / 1000000).toFixed(1)}M` : d >= 1000 ? `${Math.round(d / 1000)}k` : Math.round(d)));
-  g.append("g").attr("class", "y-axis").call(d3.axisLeft(y).ticks(4));
-  g.append("text").attr("class", "axis-title").attr("x", innerWidth / 2).attr("y", innerHeight + 42).attr("text-anchor", "middle").text(`월간 교통 ${direction}량`);
-  g.append("text").attr("class", "axis-title").attr("transform", "rotate(-90)").attr("x", -innerHeight / 2).attr("y", -42).attr("text-anchor", "middle").text("산불 발생 건수");
-  g.append("path").datum(data).attr("class", "correlation-line").attr("d", d3.line().x(d => x(d.trafficValue)).y(d => y(d.fireValue)));
-  g.selectAll("circle").data(data).join("circle")
-    .attr("class", d => `correlation-dot ${d.month === state.month ? "is-current" : ""}`)
-    .attr("cx", d => x(d.trafficValue)).attr("cy", d => y(d.fireValue)).attr("r", d => d.month === state.month ? 7 : 5)
+  const tickInterval = width < 780 ? d3.utcMonth.every(6) : d3.utcMonth.every(3);
+  g.append("g").attr("class", "chart-grid traffic-grid").call(d3.axisLeft(yTraffic).ticks(4).tickSize(-innerWidth).tickFormat(""));
+  g.append("g").attr("class", "chart-grid fire-grid").attr("transform", `translate(0,${fireTop})`)
+    .call(d3.axisLeft(yFire).ticks(3).tickSize(-innerWidth).tickFormat(""));
+  g.append("g").attr("class", "x-axis").attr("transform", `translate(0,${fireTop + fireHeight})`)
+    .call(d3.axisBottom(x).ticks(tickInterval).tickFormat(d3.utcFormat("%y.%m")));
+  g.append("g").attr("class", "y-axis").call(d3.axisLeft(yTraffic).ticks(4).tickFormat(value => value >= 1000000 ? `${(value / 1000000).toFixed(1)}M` : value >= 1000 ? `${Math.round(value / 1000)}k` : value));
+  g.append("g").attr("class", "y-axis fire-y-axis").attr("transform", `translate(0,${fireTop})`)
+    .call(d3.axisLeft(yFire).ticks(3).tickFormat(value => value >= 10000 ? `${Math.round(value / 1000)}k` : value >= 1000 ? `${(value / 1000).toFixed(1)}k` : Math.round(value)));
+  g.append("text").attr("class", "axis-title").attr("transform", "rotate(-90)").attr("x", -trafficHeight / 2).attr("y", -52).attr("text-anchor", "middle").text("월간 교통량");
+  g.append("text").attr("class", "axis-title fire-axis-title").attr("transform", "rotate(-90)").attr("x", -(fireTop + fireHeight / 2)).attr("y", -52).attr("text-anchor", "middle").text(state.corrMetric === "fires" ? "산불 발생 건수" : "산불 피해면적 (ha · symlog)");
+  g.append("line").attr("class", "correlation-plot-divider").attr("x1", 0).attr("x2", innerWidth).attr("y1", trafficHeight + plotGap / 2).attr("y2", trafficHeight + plotGap / 2);
+  g.append("text").attr("class", "correlation-band-label traffic-band-label").attr("x", 8).attr("y", 16).text(`${trafficViewLabel} 교통량 · 상단`);
+  g.append("text").attr("class", "correlation-band-label fire-band-label").attr("x", 8).attr("y", fireTop + 16).text(`산불 ${fireLabel} · 하단`);
+
+  const trafficLine = key => d3.line().curve(d3.curveMonotoneX).x(d => x(d.date)).y(d => yTraffic(d[key]));
+  const fireLine = d3.line().curve(d3.curveMonotoneX).x(d => x(d.date)).y(d => fireTop + yFire(d[fireKey]));
+  activeTraffic.forEach(series => {
+    g.append("path").datum(data).attr("class", `correlation-line ${series.key === "inflowValue" ? "inflow-line" : "outflow-line"}`).attr("stroke", `url(#${series.gradient})`).attr("d", trafficLine(series.key));
+  });
+  g.append("path").datum(data).attr("class", "correlation-line fire-line").attr("stroke", "url(#corr-fire-gradient)").attr("d", fireLine);
+
+  const selected = data[state.month];
+  g.append("line").attr("class", "correlation-month-guide")
+    .attr("x1", x(selected.date)).attr("x2", x(selected.date)).attr("y1", 0).attr("y2", fireTop + fireHeight);
+  g.append("text").attr("class", "correlation-month-label").attr("x", x(selected.date)).attr("y", -10).attr("text-anchor", "middle").text(selected.period.replace("-", "."));
+
+  const pointOpacity = d => {
+    if (d.month > state.month) return .14;
+    if (state.month === 0) return d.month === 0 ? 1 : .14;
+    return .34 + .66 * (d.month / state.month);
+  };
+  const pointRadius = d => d.month === state.month ? 5.8 : 3.2;
+  const tooltipText = d => {
+    const trafficRows = activeTraffic.map(series => `<span>${series.label.replace("량", "")} ${formatTraffic(d[series.key])}</span>`).join("");
+    return `<b>${formatPeriod(d.period)}</b>${trafficRows}<span>산불 ${Math.round(d.fireValue)}건 · 피해 ${d.areaValue.toLocaleString("ko-KR", { maximumFractionDigits: 1 })}ha</span>`;
+  };
+  const bindPointEvents = selection => selection
     .attr("tabindex", 0)
     .attr("role", "button")
     .attr("aria-label", d => `${formatPeriod(d.period)}을 기준월로 선택`)
@@ -493,11 +697,118 @@ function renderCorrelation() {
       event.preventDefault();
       chooseMonth(d.month);
     })
-    .on("mousemove", (event, d) => showTooltip(event, `<b>${formatPeriod(d.period)}</b><span>${direction} 교통 ${formatTraffic(d.trafficValue)}</span><span>산불 ${Math.round(d.fireValue)}건</span>`))
+    .on("mousemove", (event, d) => showTooltip(event, tooltipText(d)))
     .on("mouseleave", hideTooltip);
-  const labeled = data.filter(d => d.month === state.month || d.month % 3 === 0 || d.month === data.length - 1);
-  g.selectAll(".month-point-label").data(labeled).join("text").attr("class", "month-point-label")
-    .attr("x", d => x(d.trafficValue) + 7).attr("y", d => y(d.fireValue) - 7).text(d => d.period.slice(2).replace("-", "."));
+
+  activeTraffic.forEach(series => {
+    bindPointEvents(g.append("g").selectAll(`circle.${series.className}`).data(data).join("circle")
+      .attr("class", d => `correlation-dot ${series.className} ${d.month === state.month ? "is-current" : ""}`)
+      .attr("cx", d => x(d.date)).attr("cy", d => yTraffic(d[series.key])).attr("r", pointRadius).attr("opacity", pointOpacity));
+  });
+  bindPointEvents(g.append("g").selectAll("circle.fire-dot").data(data).join("circle")
+    .attr("class", d => `correlation-dot fire-dot ${d.month === state.month ? "is-current" : ""}`)
+    .attr("cx", d => x(d.date)).attr("cy", d => fireTop + yFire(d[fireKey])).attr("r", pointRadius).attr("opacity", pointOpacity));
+
+  const legendData = [...activeTraffic, { label: `산불 ${fireLabel}`, color: state.corrMetric === "fires" ? "#ff9a5a" : "#ff5f69" }];
+  const legend = g.append("g").attr("class", "correlation-legend").attr("transform", "translate(0,-30)");
+  const legendItem = legend.selectAll("g").data(legendData).join("g").attr("transform", (_, index) => `translate(${index * 112},0)`);
+  legendItem.append("line").attr("x1", 0).attr("x2", 22).attr("y1", 0).attr("y2", 0).attr("stroke", d => d.color);
+  legendItem.append("circle").attr("cx", 11).attr("cy", 0).attr("r", 3).attr("fill", d => d.color);
+  legendItem.append("text").attr("x", 29).attr("y", 4).text(d => d.label);
+}
+
+function renderEventComparison({ host, data, fireKey, fireLabel, regionName, trafficViewLabel, activeTraffic }) {
+  const eventRow = data[state.month];
+  const selectedHasFire = eventRow[fireKey] > 0;
+  const windowData = data.filter(row => Math.abs(row.month - eventRow.month) <= 1);
+  const previous = data[eventRow.month - 1];
+  const changeText = activeTraffic.map(series => {
+    if (!previous || previous[series.key] === 0) return `${series.label} 전월 비교 없음`;
+    const change = (eventRow[series.key] - previous[series.key]) / previous[series.key] * 100;
+    return `${series.label.replace("량", "")} ${change >= 0 ? "+" : ""}${change.toFixed(1)}%`;
+  }).join(" · ");
+  const fireValueText = state.corrMetric === "fires" ? `${Math.round(eventRow.fireValue)}건` : `${eventRow.areaValue.toFixed(1)}ha`;
+  document.querySelector("#eventMonthLabel").textContent = `${selectedHasFire ? "산불 발생월" : "선택 기준월"} · ${formatPeriod(eventRow.period)}`;
+  document.querySelector("#eventFireValue").textContent = fireValueText;
+  document.querySelector("#eventDeltaLabel").textContent = `전월→기준월 ${changeText}`;
+  document.querySelector("#corrCopy").textContent = selectedHasFire
+    ? `${regionName}의 선택월을 중심으로 전월·발생월·다음 달 ${trafficViewLabel} 교통량을 비교합니다.`
+    : `${regionName}의 선택월에는 해당 산불 기록이 없습니다. 선택월을 중심으로 전월·기준월·다음 달 ${trafficViewLabel} 교통량을 비교합니다.`;
+  host.setAttribute("aria-label", "선택 지역의 기준월 전후 산불과 유입량 및 유출량 비교 그래프");
+
+  const width = Math.max(host.clientWidth, 620);
+  const height = Math.max(host.clientHeight, 370);
+  const margin = { top: 52, right: 34, bottom: 56, left: 68 };
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+  const plotGap = 42;
+  const trafficHeight = Math.round((innerHeight - plotGap) * .62);
+  const fireHeight = innerHeight - plotGap - trafficHeight;
+  const fireTop = trafficHeight + plotGap;
+  const x = d3.scaleBand().domain(windowData.map(row => row.period)).range([0, innerWidth]).padding(.28);
+  const xSeries = d3.scaleBand().domain(activeTraffic.map(series => series.key)).range([0, x.bandwidth()]).padding(.18);
+  const trafficMax = d3.max(windowData, row => d3.max(activeTraffic, series => row[series.key])) || 1;
+  const fireMax = d3.max(windowData, row => row[fireKey]) || 1;
+  const yTraffic = d3.scaleLinear().domain([0, trafficMax * 1.12]).nice().range([trafficHeight, 0]);
+  const yFire = state.corrMetric === "area"
+    ? d3.scaleSymlog().constant(1).domain([0, fireMax * 1.12]).nice().range([fireHeight, 0])
+    : d3.scaleLinear().domain([0, fireMax * 1.15]).nice().range([fireHeight, 0]);
+  const svg = d3.select(host).selectAll("svg").data([null]).join("svg").attr("viewBox", `0 0 ${width} ${height}`);
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const focusX = x(eventRow.period);
+  if (focusX != null) g.append("rect").attr("class", "event-focus-band").attr("x", focusX - 8).attr("y", -12).attr("width", x.bandwidth() + 16).attr("height", fireTop + fireHeight + 20).attr("rx", 12);
+  g.append("g").attr("class", "chart-grid").call(d3.axisLeft(yTraffic).ticks(4).tickSize(-innerWidth).tickFormat(""));
+  g.append("g").attr("class", "chart-grid").attr("transform", `translate(0,${fireTop})`).call(d3.axisLeft(yFire).ticks(3).tickSize(-innerWidth).tickFormat(""));
+  g.append("g").attr("class", "y-axis").call(d3.axisLeft(yTraffic).ticks(4).tickFormat(value => value >= 1000000 ? `${(value / 1000000).toFixed(1)}M` : value >= 1000 ? `${Math.round(value / 1000)}k` : value));
+  g.append("g").attr("class", "y-axis fire-y-axis").attr("transform", `translate(0,${fireTop})`).call(d3.axisLeft(yFire).ticks(3).tickFormat(value => value >= 1000 ? `${(value / 1000).toFixed(1)}k` : Math.round(value)));
+  g.append("g").attr("class", "x-axis").attr("transform", `translate(0,${fireTop + fireHeight})`)
+    .call(d3.axisBottom(x).tickFormat(period => `${period === eventRow.period ? (selectedHasFire ? "발생월 " : "기준월 ") : ""}${period.replace("-", ".")}`));
+  g.append("text").attr("class", "axis-title").attr("transform", "rotate(-90)").attr("x", -trafficHeight / 2).attr("y", -52).attr("text-anchor", "middle").text("월간 교통량");
+  g.append("text").attr("class", "axis-title fire-axis-title").attr("transform", "rotate(-90)").attr("x", -(fireTop + fireHeight / 2)).attr("y", -52).attr("text-anchor", "middle").text(state.corrMetric === "fires" ? "산불 발생 건수" : "산불 피해면적 (ha · symlog)");
+  g.append("line").attr("class", "correlation-plot-divider").attr("x1", 0).attr("x2", innerWidth).attr("y1", trafficHeight + plotGap / 2).attr("y2", trafficHeight + plotGap / 2);
+  g.append("text").attr("class", "correlation-band-label traffic-band-label").attr("x", 8).attr("y", 16).text(`${trafficViewLabel} 교통량 · 상단`);
+  g.append("text").attr("class", "correlation-band-label fire-band-label").attr("x", 8).attr("y", fireTop + 16).text(`산불 ${fireLabel} · 하단`);
+
+  const monthGroups = g.append("g").selectAll("g.event-month")
+    .data(windowData)
+    .join("g")
+    .attr("class", row => `event-month ${row.period === eventRow.period ? "is-event" : ""}`)
+    .attr("transform", row => `translate(${x(row.period)},0)`);
+  monthGroups.selectAll("rect.event-traffic-bar")
+    .data(row => activeTraffic.map(series => ({ row, series })))
+    .join("rect")
+    .attr("class", item => `event-traffic-bar ${item.series.key === "inflowValue" ? "is-inflow" : "is-outflow"}`)
+    .attr("x", item => xSeries(item.series.key)).attr("width", xSeries.bandwidth())
+    .attr("y", item => yTraffic(item.row[item.series.key])).attr("height", item => trafficHeight - yTraffic(item.row[item.series.key])).attr("rx", 5);
+  monthGroups.append("line").attr("class", "event-fire-stem")
+    .attr("x1", x.bandwidth() / 2).attr("x2", x.bandwidth() / 2)
+    .attr("y1", fireTop + fireHeight).attr("y2", row => fireTop + yFire(row[fireKey]));
+  monthGroups.append("circle").attr("class", "event-fire-dot")
+    .attr("cx", x.bandwidth() / 2).attr("cy", row => fireTop + yFire(row[fireKey])).attr("r", row => row.period === eventRow.period ? 6 : 4)
+    .attr("fill", state.corrMetric === "fires" ? "#ff9a5a" : "#ff5f69");
+  monthGroups.append("rect").attr("class", "event-hit-area")
+    .attr("x", 0).attr("y", -8).attr("width", x.bandwidth()).attr("height", fireTop + fireHeight + 12)
+    .attr("tabindex", 0).attr("role", "button").attr("aria-label", row => `${formatPeriod(row.period)}을 기준월로 선택`)
+    .on("click", (_, row) => chooseMonth(row.month))
+    .on("keydown", (event, row) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      chooseMonth(row.month);
+    })
+    .on("mousemove", (event, row) => {
+      const trafficRows = activeTraffic.map(series => `<span>${series.label} ${formatTraffic(row[series.key])}</span>`).join("");
+      showTooltip(event, `<b>${formatPeriod(row.period)}</b>${trafficRows}<span>산불 ${Math.round(row.fireValue)}건 · 피해 ${row.areaValue.toFixed(1)}ha</span>`);
+    })
+    .on("mouseleave", hideTooltip);
+
+  const legendData = [...activeTraffic, { label: `산불 ${fireLabel}`, color: state.corrMetric === "fires" ? "#ff9a5a" : "#ff5f69" }];
+  const legend = g.append("g").attr("class", "correlation-legend").attr("transform", "translate(0,-30)");
+  const legendItem = legend.selectAll("g").data(legendData).join("g").attr("transform", (_, index) => `translate(${index * 112},0)`);
+  legendItem.append("line").attr("x1", 0).attr("x2", 22).attr("stroke", row => row.color);
+  legendItem.append("circle").attr("cx", 11).attr("r", 3).attr("fill", row => row.color);
+  legendItem.append("text").attr("x", 29).attr("y", 4).text(row => row.label);
 }
 
 function renderDetails() {
@@ -581,6 +892,111 @@ function renderDetails() {
   });
 }
 
+function renderInsights() {
+  const regionName = state.selected || "전국";
+  const directionLabel = state.direction === "inflow" ? "유입" : "유출";
+  const aggregate = (month, direction) => {
+    const rows = state.selected ? [rowFor(byName.get(state.selected), month, state.cause, direction)] : allRows(month, state.cause, direction);
+    return {
+      trafficValue: d3.sum(rows, row => row.trafficValue),
+      fireValue: d3.sum(rows, row => row.fireValue),
+      areaValue: d3.sum(rows, row => row.areaValue)
+    };
+  };
+  const current = aggregate(state.month, state.direction);
+  const previous = state.month > 0 ? aggregate(state.month - 1, state.direction) : null;
+  if (!previous || previous.trafficValue === 0) {
+    document.querySelector("#trafficInsightTitle").textContent = `${directionLabel} ${formatTraffic(current.trafficValue)}`;
+    document.querySelector("#trafficInsightCopy").textContent = `${regionName}의 첫 비교 가능 월입니다.`;
+  } else {
+    const change = (current.trafficValue - previous.trafficValue) / previous.trafficValue * 100;
+    const movement = Math.abs(change) < .05 ? "거의 동일" : `${change >= 0 ? "+" : ""}${change.toFixed(1)}%`;
+    document.querySelector("#trafficInsightTitle").textContent = `전월 대비 ${movement}`;
+    document.querySelector("#trafficInsightCopy").textContent = `${regionName} ${directionLabel} ${formatTraffic(current.trafficValue)} · ${formatPeriod(months[state.month])}`;
+  }
+
+  const fireRows = allRows(state.month, state.cause, "outflow");
+  const fireKey = state.metric === "area" ? "areaValue" : "fireValue";
+  const selectedFire = state.selected ? fireRows.find(row => row.name === state.selected) : null;
+  if (!selectedFire) {
+    const totalFire = d3.sum(fireRows, row => row.fireValue);
+    const totalArea = d3.sum(fireRows, row => row.areaValue);
+    document.querySelector("#fireInsightTitle").textContent = `전국 산불 ${Math.round(totalFire)}건`;
+    document.querySelector("#fireInsightCopy").textContent = `피해면적 ${totalArea.toFixed(1)}ha · 같은 달 기록 합계`;
+  } else {
+    const rank = 1 + fireRows.filter(row => row[fireKey] > selectedFire[fireKey]).length;
+    const metricValue = state.metric === "area" ? `${selectedFire.areaValue.toFixed(1)}ha` : `${Math.round(selectedFire.fireValue)}건`;
+    document.querySelector("#fireInsightTitle").textContent = `${state.metric === "area" ? "피해면적" : "발생건수"} 전국 ${rank}위`;
+    document.querySelector("#fireInsightCopy").textContent = `${regionName} ${metricValue} · 17개 지역 기준`;
+  }
+
+  const inflow = aggregate(state.month, "inflow").trafficValue;
+  const outflow = aggregate(state.month, "outflow").trafficValue;
+  const net = outflow - inflow;
+  const balanceTitle = Math.abs(net) < 1 ? "유입·유출 균형" : `${net > 0 ? "순유출" : "순유입"} ${formatTraffic(Math.abs(net))}`;
+  document.querySelector("#balanceInsightTitle").textContent = balanceTitle;
+  document.querySelector("#balanceInsightCopy").textContent = `유입 ${formatTraffic(inflow)} · 유출 ${formatTraffic(outflow)}`;
+}
+
+function renderHeatmap() {
+  const host = document.querySelector("#anomalyHeatmap");
+  if (!host || host.hidden) return;
+  const metric = state.heatmapMetric;
+  const metricLabel = { outflow: "유출량", inflow: "유입량", fires: "산불 발생건수", area: "산불 피해면적" }[metric];
+  const records = [];
+  regions.forEach(region => {
+    const raw = months.map((period, month) => {
+      const direction = metric === "inflow" ? "inflow" : "outflow";
+      const row = rowFor(region, month, state.cause, direction);
+      const value = metric === "fires" ? row.fireValue : metric === "area" ? row.areaValue : row.trafficValue;
+      return { region, period, month, value };
+    });
+    const mean = d3.mean(raw, row => row.value) || 0;
+    const deviation = d3.deviation(raw, row => row.value) || 1;
+    raw.forEach(row => records.push({ ...row, mean, z: (row.value - mean) / deviation }));
+  });
+
+  const width = Math.max(host.clientWidth, 820);
+  const height = Math.max(host.clientHeight, 410);
+  const margin = { top: 24, right: 18, bottom: 48, left: 76 };
+  const innerWidth = width - margin.left - margin.right;
+  const innerHeight = height - margin.top - margin.bottom;
+  const x = d3.scaleBand().domain(months).range([0, innerWidth]).padding(.06);
+  const y = d3.scaleBand().domain(regions.map(region => region.name)).range([0, innerHeight]).padding(.08);
+  const color = d3.scaleDiverging().domain([-2.5, 0, 2.5]).interpolator(t => d3.interpolateRgbBasis(["#244d72", "#14263b", "#ff6a5f"])(t));
+  const svg = d3.select(host).selectAll("svg").data([null]).join("svg").attr("viewBox", `0 0 ${width} ${height}`);
+  svg.selectAll("*").remove();
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+  g.append("rect").attr("class", "heatmap-current-column").attr("x", x(months[state.month]) - 2).attr("y", -6).attr("width", x.bandwidth() + 4).attr("height", innerHeight + 12).attr("rx", 4);
+  g.append("g").attr("class", "y-axis heatmap-y-axis").call(d3.axisLeft(y).tickFormat(name => shortName(name)).tickSize(0));
+  const tickMonths = months.filter((_, index) => index % 3 === 0 || index === months.length - 1);
+  g.append("g").attr("class", "x-axis heatmap-x-axis").attr("transform", `translate(0,${innerHeight})`)
+    .call(d3.axisBottom(x).tickValues(tickMonths).tickFormat(period => period.replace("-", ".")).tickSize(0));
+
+  const cells = g.append("g").selectAll("rect.heatmap-cell")
+    .data(records)
+    .join("rect")
+    .attr("class", row => `heatmap-cell ${state.selected === row.region.name ? "is-selected-region" : ""} ${state.month === row.month ? "is-selected-month" : ""}`)
+    .attr("x", row => x(row.period)).attr("y", row => y(row.region.name))
+    .attr("width", x.bandwidth()).attr("height", y.bandwidth()).attr("rx", 2)
+    .attr("fill", row => color(Math.max(-2.5, Math.min(2.5, row.z))))
+    .attr("tabindex", 0).attr("role", "button")
+    .attr("aria-label", row => `${row.region.name} ${formatPeriod(row.period)} ${metricLabel} 선택`)
+    .on("click", (_, row) => chooseRegionAndMonth(row.region.name, row.month))
+    .on("keydown", (event, row) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      chooseRegionAndMonth(row.region.name, row.month);
+    })
+    .on("mousemove", (event, row) => {
+      const valueText = metric === "fires" ? `${Math.round(row.value)}건` : metric === "area" ? `${row.value.toFixed(1)}ha` : formatTraffic(row.value);
+      const deviationText = Math.abs(row.z) < .35 ? "평소 수준" : row.z > 0 ? `평소보다 높음 (+${row.z.toFixed(1)}σ)` : `평소보다 낮음 (${row.z.toFixed(1)}σ)`;
+      showTooltip(event, `<b>${row.region.name} · ${formatPeriod(row.period)}</b><span>${metricLabel} ${valueText}</span><span>${deviationText}</span>`);
+    })
+    .on("mouseleave", hideTooltip);
+  cells.filter(row => state.selected === row.region.name && state.month === row.month).classed("is-current-cell", true);
+}
+
 function observeResize() {
   const observer = new ResizeObserver(() => {
     cancelAnimationFrame(renderFrame);
@@ -588,10 +1004,12 @@ function observeResize() {
       renderMap();
       renderScatter();
       renderCorrelation();
+      renderHeatmap();
     });
   });
   observer.observe(document.querySelector("#mapChart"));
   observer.observe(document.querySelector("#scatterChart"));
+  observer.observe(document.querySelector("#anomalyHeatmap"));
 }
 
 async function init() {
